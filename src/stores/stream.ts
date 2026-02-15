@@ -1,0 +1,180 @@
+import { reactive, readonly } from 'vue'
+
+/** openclaw = live from OpenClaw Gateway (real bots); config = from file; demo = simulated */
+export type AgentSource = 'openclaw' | 'config' | 'demo'
+
+export interface AgentState {
+  id: string
+  name: string
+  emoji: string
+  online: boolean
+  lastSeen?: number
+  error?: string
+  sessions?: number
+  model?: string
+  focus?: string
+  intro?: string
+  source?: AgentSource
+  ip?: string | null
+  country?: string | null
+  region?: string | null
+  city?: string | null
+}
+
+export interface TopicPost {
+  id: string
+  title: string
+  body: string
+  agentId: string
+  agentName: string
+  problem: string
+  category?: string
+  categoryLabel?: string
+  approach?: string
+  needed?: string
+  committedBots?: string[]
+  readyToCode?: boolean
+  createdAt: number
+  upvotes: number
+}
+
+export interface BotJoinedEvent {
+  agentId: string
+  agentName: string
+  focus: string
+  intro: string
+  ts: number
+}
+
+export interface TopicReadyEvent {
+  topicId: string
+  title?: string
+  problem?: string
+  committedBots: string[]
+  ts: number
+}
+
+export interface CodeEdit {
+  agentId: string
+  agentName: string
+  text: string
+  range?: { start: number; end: number }
+  ts: number
+}
+
+export interface BotMessage {
+  id: string
+  fromId: string
+  fromName: string
+  toId: string | null
+  toName: string | null
+  text: string
+  ts: number
+}
+
+export interface HardwareDesign {
+  id: string
+  agentId: string
+  agentName: string
+  topicProblem: string
+  type: string
+  content: string
+  ts: number
+}
+
+export type AgentStatus = 'seeking' | 'committed' | 'coding' | 'offline'
+
+const state = reactive<{
+  connected: boolean
+  agentState: Record<string, AgentState>
+  agentStatuses: Record<string, AgentStatus>
+  topics: TopicPost[]
+  currentTopicId: string | null
+  codeBuffer: string
+  codeEdits: CodeEdit[]
+  botJoinedLog: BotJoinedEvent[]
+  topicReadyLog: TopicReadyEvent[]
+  botMessages: BotMessage[]
+  hardwareDesigns: HardwareDesign[]
+}>({
+  connected: false,
+  agentState: {},
+  agentStatuses: {},
+  topics: [],
+  currentTopicId: null,
+  codeBuffer: '',
+  codeEdits: [],
+  botJoinedLog: [],
+  topicReadyLog: [],
+  botMessages: [],
+  hardwareDesigns: []
+})
+
+let evtSource: EventSource | null = null
+
+export function useStreamStore() {
+  function connect() {
+    const base = import.meta.env.DEV ? '' : ''
+    const url = `${base}/api/stream`
+    evtSource = new EventSource(url.startsWith('http') ? url : `${location.origin}${url}`)
+    evtSource.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data)
+        if (msg.type === 'snapshot') {
+          if (msg.data?.agents) Object.assign(state.agentState, msg.data.agents)
+          if (msg.data?.agentStatuses) state.agentStatuses = { ...msg.data.agentStatuses }
+          if (msg.data?.topics) state.topics = msg.data.topics || []
+          if (msg.data?.currentTopicId != null) state.currentTopicId = msg.data.currentTopicId
+          if (msg.data?.codeBuffer != null) state.codeBuffer = msg.data.codeBuffer
+          if (msg.data?.codeEdits) state.codeEdits = (msg.data.codeEdits || []).slice(-100)
+          if (msg.data?.botJoinedLog) state.botJoinedLog = msg.data.botJoinedLog.slice(-50)
+          if (msg.data?.topicReadyLog) state.topicReadyLog = msg.data.topicReadyLog.slice(-20)
+          if (msg.data?.botMessages) state.botMessages = msg.data.botMessages.slice(-80)
+          if (msg.data?.hardwareDesigns) state.hardwareDesigns = msg.data.hardwareDesigns.slice(-50)
+        } else if (msg.type === 'bot_message') {
+          if (msg.data) state.botMessages = [...state.botMessages, msg.data].slice(-80)
+        } else if (msg.type === 'hardware') {
+          if (msg.data) state.hardwareDesigns = [...state.hardwareDesigns, msg.data].slice(-50)
+        } else if (msg.type === 'bot_joined') {
+          if (msg.data) state.botJoinedLog = [...state.botJoinedLog, msg.data].slice(-50)
+        } else if (msg.type === 'topic_ready') {
+          if (msg.data?.topic) {
+            const idx = state.topics.findIndex((t: TopicPost) => t.id === msg.data.topic.id)
+            if (idx >= 0) {
+              state.topics[idx] = { ...state.topics[idx], ...msg.data.topic }
+            }
+          }
+          if (msg.data?.committedBots && msg.data?.topicId) {
+            const entry = { topicId: msg.data.topicId, title: msg.data.topic?.title, problem: msg.data.topic?.problem, committedBots: msg.data.committedBots, ts: Date.now() }
+            state.topicReadyLog = [...state.topicReadyLog, entry].slice(-20)
+          }
+        } else if (msg.type === 'agent') {
+          if (msg.removed) delete state.agentState[msg.id]
+          else if (msg.data) state.agentState[msg.id] = msg.data
+        } else if (msg.type === 'topic') {
+          state.topics.unshift(msg.data)
+        } else if (msg.type === 'code') {
+          state.codeBuffer = msg.data?.buffer ?? state.codeBuffer
+          if (msg.data?.edit) state.codeEdits.push(msg.data.edit)
+        }
+      } catch (_) {}
+    }
+    evtSource.onopen = () => { state.connected = true }
+    evtSource.onerror = () => {
+      state.connected = false
+      setTimeout(connect, 3000)
+    }
+  }
+
+  function disconnect() {
+    evtSource?.close()
+    evtSource = null
+    state.connected = false
+  }
+
+  return {
+    ...readonly(state),
+    connect,
+    disconnect
+  }
+}

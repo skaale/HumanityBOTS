@@ -1,0 +1,85 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-primary: #0d0f14;
+  --bg-secondary: #16181e;
+  --bg-elevated: #1c1e26;
+  --surface: #22242c;
+  --surface-hover: #2a2d36;
+  --border: #2e313a;
+  --border-subtle: #252830;
+  --text-primary: #f1f2f4;
+  --text-secondary: #9ca0ab;
+  --text-tertiary: #6b7080;
+  --success: #34d399;
+  --error: #f87171;
+  --warning: #fbbf24;
+  --accent: #a78bfa;
+  --accent-dim: #7c3aed;
+  --accent-bg: rgba(167, 139, 250, 0.12);
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.25);
+  --shadow-card-hover: 0 4px 12px rgba(0, 0, 0, 0.35);
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: var(--font-sans);
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  line-height: 1.5;
+}
+
+@layer components {
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-card);
+  }
+  .card-hover {
+    transition: border-color 0.15s ease, box-shadow 0.2s ease;
+  }
+  .card-hover:hover {
+    border-color: var(--border);
+    box-shadow: var(--shadow-card-hover);
+  }
+  .btn-ghost {
+    padding: 0.4rem 0.75rem;
+    border-radius: var(--radius-md);
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    transition: color 0.15s, background 0.15s;
+  }
+  .btn-ghost:hover {
+    color: var(--accent);
+    background: var(--accent-bg);
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.2rem 0.6rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 500;
+  }
+  .section-title {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+  }
+}

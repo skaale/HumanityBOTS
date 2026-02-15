@@ -1,0 +1,15 @@
+{
+  "gatewayWsUrl": "ws://127.0.0.1:18789",
+  "gatewayToken": "",
+  "agents": [
+    {
+      "id": "humanity-1",
+      "name": "Terra",
+      "emoji": "🌍",
+      "host": "127.0.0.1",
+      "port": 18789,
+      "token": "",
+      "workspace": "/path/to/agent/workspace"
+    }
+  ]
+}
