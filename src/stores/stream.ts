@@ -112,11 +112,15 @@ const state = reactive<{
 
 let evtSource: EventSource | null = null
 
+const debug = () => typeof window !== 'undefined' && (import.meta.env.DEV || localStorage.getItem('humanitybots_debug') === '1')
+
 export function useStreamStore() {
   function connect() {
     const base = import.meta.env.DEV ? '' : ''
     const url = `${base}/api/stream`
-    evtSource = new EventSource(url.startsWith('http') ? url : `${location.origin}${url}`)
+    const fullUrl = url.startsWith('http') ? url : `${location.origin}${url}`
+    if (debug()) console.log('[HumanityBOTS] stream connect', fullUrl)
+    evtSource = new EventSource(fullUrl)
     evtSource.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data)
@@ -131,6 +135,10 @@ export function useStreamStore() {
           if (msg.data?.topicReadyLog) state.topicReadyLog = msg.data.topicReadyLog.slice(-20)
           if (msg.data?.botMessages) state.botMessages = msg.data.botMessages.slice(-80)
           if (msg.data?.hardwareDesigns) state.hardwareDesigns = msg.data.hardwareDesigns.slice(-50)
+          if (debug()) {
+            const n = Object.keys(state.agentState).length
+            console.log('[HumanityBOTS] snapshot', { agents: n, topics: state.topics.length, currentTopicId: state.currentTopicId })
+          }
         } else if (msg.type === 'bot_message') {
           if (msg.data) state.botMessages = [...state.botMessages, msg.data].slice(-80)
         } else if (msg.type === 'hardware') {
@@ -157,11 +165,16 @@ export function useStreamStore() {
           state.codeBuffer = msg.data?.buffer ?? state.codeBuffer
           if (msg.data?.edit) state.codeEdits.push(msg.data.edit)
         }
+        if (debug() && msg.type !== 'snapshot') console.log('[HumanityBOTS] event', msg.type, msg.data ? Object.keys(msg.data) : [])
       } catch (_) {}
     }
-    evtSource.onopen = () => { state.connected = true }
+    evtSource.onopen = () => {
+      state.connected = true
+      if (debug()) console.log('[HumanityBOTS] stream open')
+    }
     evtSource.onerror = () => {
       state.connected = false
+      if (debug()) console.warn('[HumanityBOTS] stream error, reconnect in 3s')
       setTimeout(connect, 3000)
     }
   }

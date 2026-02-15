@@ -73,12 +73,12 @@ export function useAgentAudio() {
     } catch (_) {}
   }
 
-  function speakMessage(text: string) {
+  function speakMessage(text: string, maxLen = 200) {
     if (muteAll.value || !text?.trim()) return
     try {
       if (typeof window.speechSynthesis === 'undefined') return
       window.speechSynthesis.cancel()
-      const u = new SpeechSynthesisUtterance(text.slice(0, 200))
+      const u = new SpeechSynthesisUtterance(text.slice(0, maxLen))
       u.rate = 1.0
       u.pitch = 1.0
       u.volume = 1
@@ -87,6 +87,11 @@ export function useAgentAudio() {
       if (en) u.voice = en
       window.speechSynthesis.speak(u)
     } catch (_) {}
+  }
+
+  function speakThinker(text: string) {
+    if (muteAll.value || !text?.trim()) return
+    speakMessage(`Thinker: ${text}`, 400)
   }
 
   return {
@@ -99,6 +104,7 @@ export function useAgentAudio() {
     unlockAudio,
     playEditSound,
     playCommsSound,
-    speakMessage
+    speakMessage,
+    speakThinker
   }
 }

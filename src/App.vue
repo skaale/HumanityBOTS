@@ -35,9 +35,13 @@
               <input v-model="soundOnComms" type="checkbox" class="rounded border-[var(--border)]" />
               Bot talk
             </label>
+            <label class="flex items-center gap-1.5 text-xs cursor-pointer whitespace-nowrap" :class="speakThinker ? 'text-teal-500' : 'text-[var(--text-tertiary)]'">
+              <input v-model="speakThinker" type="checkbox" class="rounded border-teal-500 text-teal-600" />
+              Speak Thinker
+            </label>
             <label class="flex items-center gap-1.5 text-xs text-[var(--text-tertiary)] cursor-pointer whitespace-nowrap">
               <input v-model="speakMessages" type="checkbox" class="rounded border-[var(--border)]" />
-              Speak
+              Speak all
             </label>
             <label class="flex items-center gap-1.5 text-xs text-[var(--text-tertiary)] cursor-pointer whitespace-nowrap">
               <input v-model="soundOnEdit" type="checkbox" class="rounded border-[var(--border)]" />
@@ -47,6 +51,7 @@
               <input v-model="agentAudio.muteAll" type="checkbox" class="rounded border-[var(--border)]" />
               Mute all
             </label>
+            <button type="button" class="btn-ghost text-xs" @click="toggleDebug" :title="debugOn ? 'Disable console debug' : 'Enable console debug'">{{ debugOn ? 'Debug on' : 'Debug' }}</button>
             <button type="button" class="btn-ghost" @click="toggleTheme">Theme</button>
           </div>
         </div>
@@ -82,8 +87,11 @@ const navItems = [
 const stream = useStreamStore()
 const agentAudio = useAgentAudio()
 provide('agentAudio', agentAudio)
+const THINKER_AGENT_ID = 'humanity-thinker'
+const debugOn = ref(false)
 const soundOnEdit = ref(true)
 const soundOnComms = ref(true)
+const speakThinker = ref(true)
 const speakMessages = ref(false)
 const streamConnected = computed(() => stream.connected)
 const agentsTotal = computed(() => Object.keys(stream.agentState).length)
@@ -96,11 +104,13 @@ watch(() => stream.codeEdits.length, (n) => {
 })
 let lastMsgLen = 0
 watch(() => stream.botMessages.length, (n) => {
-  if (n > lastMsgLen && n > 0) {
-    if (soundOnComms.value && !agentAudio.muteAll.value) agentAudio.playCommsSound()
-    if (speakMessages.value && !agentAudio.muteAll.value) {
-      const msg = stream.botMessages[stream.botMessages.length - 1]
-      if (msg?.text) agentAudio.speakMessage(`${msg.fromName} says ${msg.text}`)
+  if (n > lastMsgLen && n > 0 && !agentAudio.muteAll.value) {
+    const msg = stream.botMessages[stream.botMessages.length - 1]
+    if (soundOnComms.value) agentAudio.playCommsSound()
+    if (msg?.text) {
+      const isThinker = msg.fromId === THINKER_AGENT_ID
+      if (isThinker && speakThinker.value) agentAudio.speakThinker(msg.text)
+      else if (!isThinker && speakMessages.value) agentAudio.speakMessage(`${msg.fromName} says ${msg.text}`)
     }
   }
   lastMsgLen = n
@@ -108,6 +118,17 @@ watch(() => stream.botMessages.length, (n) => {
 
 function toggleTheme() {
   document.documentElement.classList.toggle('dark')
+}
+function toggleDebug() {
+  if (debugOn.value) {
+    localStorage.removeItem('humanitybots_debug')
+    debugOn.value = false
+  } else {
+    localStorage.setItem('humanitybots_debug', '1')
+    debugOn.value = true
+    console.log('[HumanityBOTS] Debug on — reload to see stream logs in console.')
+  }
+  window.location.reload()
 }
 
 function onceUnlock() {
@@ -117,6 +138,9 @@ function onceUnlock() {
 }
 
 onMounted(() => {
+  try {
+    debugOn.value = localStorage.getItem('humanitybots_debug') === '1'
+  } catch (_) {}
   stream.connect()
   if (typeof window.speechSynthesis !== 'undefined') window.speechSynthesis.getVoices()
   document.addEventListener('click', onceUnlock, { once: true })

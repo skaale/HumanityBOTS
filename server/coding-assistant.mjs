@@ -1,9 +1,10 @@
 /**
  * Coding assistant — uses memory API context to suggest or improve code via an LLM.
- * Set ANTHROPIC_API_KEY to enable. Logs requests for future learning/reward signals.
+ * Supports Ollama (free, no key), Groq (free key), or Anthropic. See server/llm.mjs.
  */
 
 import { appendFileSync, existsSync, mkdirSync } from 'fs'
+import { callLLM, hasLLM } from './llm.mjs'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 
@@ -45,51 +46,32 @@ function logInteraction(entry) {
 }
 
 export async function suggestCode(memory, request = '') {
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) {
-    logInteraction({ type: 'suggest', request, placeholder: true, error: 'No ANTHROPIC_API_KEY' })
+  if (!hasLLM()) {
+    logInteraction({ type: 'suggest', request, placeholder: true, error: 'No LLM configured' })
     return {
       suggestion: null,
       placeholder: true,
-      error: 'Set ANTHROPIC_API_KEY to enable suggestions. Logged for future learning.'
+      error: 'Set OLLAMA_BASE_URL (free), GROQ_API_KEY (free tier), or ANTHROPIC_API_KEY.'
     }
   }
 
   const { system, user } = buildPrompt(memory, request)
-  const model = process.env.ASSISTANT_MODEL || 'claude-3-5-haiku-20241022'
-  const maxTokens = 512
-
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: maxTokens,
-        system,
-        messages: [{ role: 'user', content: user }]
-      })
-    })
-    if (!res.ok) {
-      const errText = await res.text()
-      logInteraction({ type: 'suggest', request, error: errText })
-      return { suggestion: null, error: errText }
+    const { text, backend, model, error } = await callLLM(system, user, { maxTokens: 512 })
+    if (error) {
+      logInteraction({ type: 'suggest', request, error })
+      return { suggestion: null, error }
     }
-    const data = await res.json()
-    const text = data.content?.[0]?.text
     const suggestion = text ? text.replace(/^```\w*\n?|\n?```$/g, '').trim() : null
     logInteraction({
       type: 'suggest',
       request,
       contextSummary: { topic: memory?.currentTopic?.title, bufferLines: memory?.codeBuffer?.split('\n').length },
       suggestionLength: suggestion?.length,
-      model: data.model
+      backend,
+      model
     })
-    return { suggestion, model: data.model }
+    return { suggestion, model, backend }
   } catch (e) {
     logInteraction({ type: 'suggest', request, error: e.message })
     return { suggestion: null, error: e.message }

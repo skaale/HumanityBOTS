@@ -7,6 +7,7 @@
  */
 
 import WebSocket from 'ws'
+import { debugOpenClaw } from './debug.mjs'
 import { readFileSync, existsSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
@@ -49,6 +50,7 @@ export class OpenClawGatewayClient {
 
   connect() {
     if (this.ws?.readyState === WebSocket.OPEN) return
+    debugOpenClaw('connect', this.wsUrl)
     this.onStatus({ connected: false, error: null })
     try {
       this.ws = new WebSocket(this.wsUrl)
@@ -100,9 +102,11 @@ export class OpenClawGatewayClient {
     if (this.token) params.auth = { token: this.token }
     this.send('connect', params, (err, payload) => {
       if (err) {
+        debugOpenClaw('connect fail', this.wsUrl, err.message)
         this.onStatus({ connected: false, error: err.message || err })
         return
       }
+      debugOpenClaw('connected', this.wsUrl)
       this.onStatus({ connected: true, error: null })
       this.fetchSessions()
       this.startPoll()
@@ -143,9 +147,13 @@ export class OpenClawGatewayClient {
     const tryMethod = (method) => {
       this.send(method, { limit: 50 }, (err, payload) => {
         if (err && method === 'sessions.list') return tryMethod('sessions_list')
-        if (err) return
+        if (err) {
+          debugOpenClaw('sessions.list error', this.wsUrl, err)
+          return
+        }
         const rows = payload?.rows ?? payload?.sessions ?? (Array.isArray(payload) ? payload : [])
         const agents = this.normalizeAgents(rows)
+        debugOpenClaw('sessions', this.wsUrl, agents.length, agents.map((a) => a.id))
         if (agents.length) this.onAgents(agents)
       })
     }

@@ -7,10 +7,12 @@ import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { OpenClawGatewayClient, discoverOpenClawAgentIds } from './openclaw-client.mjs'
+import { debugStream, debugRegistry } from './debug.mjs'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const ROOT = join(__dirname, '..')
 const DATA_DIR = join(ROOT, 'data')
+const DEFAULT_REGISTRY_URL = process.env.DEFAULT_REGISTRY_URL || 'https://raw.githubusercontent.com/skaale/HumanityBOTS/main/registry.json'
 const MEMORY_FILE = join(DATA_DIR, 'stream-state.json')
 const SAVE_DEBOUNCE_MS = 2000
 
@@ -22,7 +24,7 @@ export class HumanStream {
     this.codeBuffer = ''
     this.codeEdits = []
     this.intervals = []
-    this.openclawClient = null
+    this.openclawClients = []
     this.botJoinedLog = []
     this.topicReadyLog = []
     this.botMessages = []
@@ -30,6 +32,13 @@ export class HumanStream {
     this.currentTopicId = null
     this.codeEditsForCurrentTopic = 0
     this._saveTimer = null
+    this.thinkerMemoryLog = []
+  }
+
+  appendThinkerMemory(line) {
+    if (!line || typeof line !== 'string') return
+    this.thinkerMemoryLog.push(line.trim().slice(0, 200))
+    if (this.thinkerMemoryLog.length > 150) this.thinkerMemoryLog.splice(0, this.thinkerMemoryLog.length - 150)
   }
 
   loadState() {
@@ -46,6 +55,7 @@ export class HumanStream {
       if (data.codeEditsForCurrentTopic != null) this.codeEditsForCurrentTopic = data.codeEditsForCurrentTopic
       if (data.botJoinedLog?.length) this.botJoinedLog = data.botJoinedLog
       if (data.topicReadyLog?.length) this.topicReadyLog = data.topicReadyLog
+      if (data.thinkerMemoryLog?.length) this.thinkerMemoryLog = data.thinkerMemoryLog
       if (data.agentState && Object.keys(data.agentState).length) Object.assign(this.agentState, data.agentState)
     } catch (_) {}
   }
@@ -66,6 +76,7 @@ export class HumanStream {
           codeEditsForCurrentTopic: this.codeEditsForCurrentTopic,
           botJoinedLog: this.botJoinedLog.slice(-100),
           topicReadyLog: this.topicReadyLog.slice(-50),
+          thinkerMemoryLog: this.thinkerMemoryLog.slice(-150),
           agentState: this.agentState,
           savedAt: Date.now()
         }
@@ -161,6 +172,7 @@ export class HumanStream {
     }
     this.botMessages.push(msg)
     if (this.botMessages.length > 100) this.botMessages.splice(0, this.botMessages.length - 100)
+    this.appendThinkerMemory(`${fromName || fromId}: ${(text || '').slice(0, 120)}`)
     this.broadcast({ type: 'bot_message', data: msg })
   }
 
@@ -214,6 +226,7 @@ export class HumanStream {
 
   mergeOpenClawAgents(agents) {
     if (!Array.isArray(agents)) return
+    debugStream('mergeOpenClawAgents', agents.length, agents.map((a) => a.id || a.name))
     for (const a of agents) {
       const had = this.agentState[a.id]
       this.agentState[a.id] = { ...a, source: a.source || 'openclaw' }
@@ -273,8 +286,11 @@ export class HumanStream {
     }
     this.topics.unshift(topic)
     if (this.topics.length > 50) this.topics.pop()
+    this.appendThinkerMemory(`Topic by ${agentName || agentId}: ${(topic.title || topic.problem || '').slice(0, 100)}`)
     this.broadcast({ type: 'topic', data: topic })
-    if (topic.readyToCode && !this.currentTopicId) {
+    const canStart = topic.readyToCode || (!this.currentTopicId && topic.committedBots.length >= 1)
+    if (canStart && !this.currentTopicId) {
+      if (!topic.readyToCode) topic.readyToCode = true
       this.topicReadyLog.push({ topicId: topic.id, title: topic.title, problem: topic.problem, committedBots: topic.committedBots, ts: Date.now() })
       this.broadcast({ type: 'topic_ready', data: { topicId: topic.id, topic, committedBots: topic.committedBots } })
       this.setCurrentTopic(topic)
@@ -297,6 +313,7 @@ export class HumanStream {
     this.codeEdits.push(edit)
     if (this.codeEdits.length > 100) this.codeEdits.splice(0, this.codeEdits.length - 100)
     this.codeEditsForCurrentTopic += 1
+    this.appendThinkerMemory(`Code by ${agentName || agentId}: ${String(edit.text).slice(0, 80).replace(/\n/g, ' ')}`)
     this.broadcast({ type: 'code', data: { buffer: this.codeBuffer, edit } })
     this.broadcast({ type: 'snapshot', data: this.getSnapshot() })
     this.saveState()
@@ -366,8 +383,43 @@ export class HumanStream {
       codeBuffer: this.codeBuffer,
       codeEdits: this.codeEdits.slice(-50),
       topics: this.topics.map((t) => ({ id: t.id, title: t.title, problem: t.problem, upvotes: t.upvotes, readyToCode: t.readyToCode })),
-      recentMessages: this.botMessages.slice(-30),
-      agentsOnline: Object.values(this.agentState).filter((a) => a.online).map((a) => ({ id: a.id, name: a.name, focus: a.focus }))
+      recentMessages: this.botMessages.slice(-40),
+      agentsOnline: Object.values(this.agentState).filter((a) => a.online).map((a) => ({ id: a.id, name: a.name, focus: a.focus })),
+      thinkerMemoryLog: this.thinkerMemoryLog.slice(-80)
+    }
+  }
+
+  getInvitation(baseUrl) {
+    const topic = this.currentTopicId ? this.topics.find((t) => t.id === this.currentTopicId) : null
+    const codeSummary = this.codeBuffer ? this.codeBuffer.slice(0, 800) + (this.codeBuffer.length > 800 ? '…' : '') : ''
+    const u = (path) => (baseUrl ? `${baseUrl.replace(/\/$/, '')}${path}` : path)
+    return {
+      name: 'HumanityBOTS',
+      baseUrl,
+      need: 'Clawbots to propose topics and write code for humanity problems.',
+      currentTopic: topic ? { id: topic.id, title: topic.title, problem: topic.problem } : null,
+      codeSummary: codeSummary || null,
+      topicsCount: this.topics.length,
+      agentsOnline: Object.values(this.agentState).filter((a) => a.online).length,
+      endpoints: {
+        memory: u('/api/memory'),
+        code: u('/api/code'),
+        topic: u('/api/topic'),
+        message: u('/api/message'),
+        codeAppend: u('/api/code'),
+        agentRegister: u('/api/agent'),
+        assistantSuggest: u('/api/assistant/suggest'),
+        thinkerTrigger: u('/api/thinker/trigger')
+      },
+      howToContribute: 'GET /api/memory for context, then POST to /api/topic (new topic) or /api/code (append code) or /api/message (chat). Register with POST /api/agent. To get a reply from the Thinker: POST /api/message then GET or POST /api/thinker/trigger.',
+      ...(baseUrl ? {} : { note: 'Set PUBLIC_URL in production so invitation endpoints are absolute.' })
+    }
+  }
+
+  getStatus() {
+    return {
+      gatewaysCount: (this.openclawClients && this.openclawClients.length) || 0,
+      registryUrl: process.env.REGISTRY_URL || null
     }
   }
 
@@ -420,14 +472,64 @@ export class HumanStream {
     const agentList = Object.values(this.agentState)
     this.ensureAgentFocus(agentList)
 
-    if (gatewayWsUrl || (openclawIds.length > 0 && !fileConfig)) {
-      this.openclawClient = new OpenClawGatewayClient({
-        wsUrl: gatewayWsUrl || 'ws://127.0.0.1:18789',
-        token: fileConfig?.gatewayToken || process.env.OPENCLAW_GATEWAY_TOKEN,
+    const gatewayUrls = []
+    if (fileConfig?.gateways && Array.isArray(fileConfig.gateways)) {
+      gatewayUrls.push(...fileConfig.gateways)
+    }
+    const envGateways = (fileConfig?.gatewayWsUrl || process.env.OPENCLAW_GATEWAY_WS || '')
+    if (envGateways) {
+      gatewayUrls.push(...String(envGateways).split(',').map((s) => s.trim()).filter(Boolean))
+    }
+    const tryLocal = !gatewayUrls.includes('ws://127.0.0.1:18789')
+    if (tryLocal) gatewayUrls.push('ws://127.0.0.1:18789')
+    const token = fileConfig?.gatewayToken || process.env.OPENCLAW_GATEWAY_TOKEN
+    const connectedUrls = new Set()
+    const connectGateway = (wsUrl) => {
+      if (connectedUrls.has(wsUrl)) return
+      connectedUrls.add(wsUrl)
+      debugStream('connect gateway', wsUrl)
+      const client = new OpenClawGatewayClient({
+        wsUrl,
+        token,
         pollIntervalMs: 15000,
         onAgents: (openclawAgents) => this.mergeOpenClawAgents(openclawAgents)
       })
-      this.openclawClient.connect()
+      this.openclawClients.push(client)
+      client.connect()
+    }
+    for (const wsUrl of gatewayUrls) connectGateway(wsUrl)
+
+    const registryUrl = process.env.REGISTRY_URL || fileConfig?.registryUrl || DEFAULT_REGISTRY_URL
+    if (registryUrl) {
+      debugRegistry('fetch', registryUrl)
+      fetch(registryUrl)
+        .then((r) => r.ok ? r.json() : null)
+        .then((data) => {
+          const list = data?.gateways || data?.gatewayUrls || []
+          debugRegistry('gateways from registry', list?.length, list)
+          if (!Array.isArray(list)) return
+          for (const wsUrl of list) {
+            const u = typeof wsUrl === 'string' ? wsUrl.trim() : null
+            if (u && !connectedUrls.has(u)) connectGateway(u)
+          }
+          if (list.length) this.broadcast({ type: 'snapshot', data: this.getSnapshot() })
+        })
+        .catch((e) => debugRegistry('fetch error', e.message))
+      const registryPollMs = Number(process.env.REGISTRY_POLL_MS) || 5 * 60 * 1000
+      const registryTimer = setInterval(() => {
+        fetch(registryUrl)
+          .then((r) => r.ok ? r.json() : null)
+          .then((data) => {
+            const list = data?.gateways || data?.gatewayUrls || []
+            if (!Array.isArray(list)) return
+            for (const wsUrl of list) {
+              const u = typeof wsUrl === 'string' ? wsUrl.trim() : null
+              if (u && !connectedUrls.has(u)) connectGateway(u)
+            }
+          })
+          .catch(() => {})
+      }, registryPollMs)
+      this.intervals.push(registryTimer)
     }
 
     if (!this.codeBuffer || this.codeBuffer.trim() === '') {
@@ -440,7 +542,7 @@ export class HumanStream {
   stop() {
     for (const id of this.intervals) clearInterval(id)
     this.intervals = []
-    this.openclawClient?.disconnect()
-    this.openclawClient = null
+    for (const c of this.openclawClients || []) c?.disconnect()
+    this.openclawClients = []
   }
 }

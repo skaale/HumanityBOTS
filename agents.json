@@ -1,0 +1,7 @@
+{
+  "agents": [
+    { "id": "humanity-1", "name": "Terra", "emoji": "🌍" },
+    { "id": "humanity-2", "name": "Medic", "emoji": "⚕️" },
+    { "id": "humanity-3", "name": "Codex", "emoji": "⌨️" }
+  ]
+}
