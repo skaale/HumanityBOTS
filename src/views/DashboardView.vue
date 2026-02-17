@@ -327,7 +327,7 @@ const idleHint = computed(() => {
   if (serverStatus.value.llmConfigured) {
     return 'Waiting for the Thinker to propose a topic (runs every few minutes). Config-only agents do not call the API — connect OpenClaw gateways for more activity.'
   }
-  return 'Thinker needs an LLM: set OPENWEBUI_API_URL, GROQ_API_KEY, or OLLAMA_BASE_URL in .env, then restart the server.'
+  return 'Thinker needs an LLM: set OLLAMA_BASE_URL (or OPENWEBUI_API_URL / GROQ_API_KEY) in .env locally, or in Railway Variables when deployed, then restart.'
 })
 
 onMounted(() => {
