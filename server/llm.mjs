@@ -45,6 +45,34 @@ export async function callLLM(system, user, options = {}) {
       return { text, backend: 'ollama', model }
     } catch (e) {
       debugLLM('ollama error', e.message)
+      const openWebUiUrl = (process.env.OPENWEBUI_API_URL || '').replace(/\/$/, '')
+      if (openWebUiUrl) {
+        try {
+          const owModel = process.env.OPENWEBUI_MODEL || 'qwen3-coder-next:latest'
+          const headers = { 'Content-Type': 'application/json' }
+          if (process.env.OPENWEBUI_API_KEY) headers.Authorization = `Bearer ${process.env.OPENWEBUI_API_KEY}`
+          debugLLM('call openwebui fallback', owModel)
+          const res = await fetch(`${openWebUiUrl}/api/chat/completions`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              model: owModel,
+              max_tokens: maxTokens,
+              messages: [
+                { role: 'system', content: system },
+                { role: 'user', content: user }
+              ]
+            })
+          })
+          if (!res.ok) throw new Error(await res.text())
+          const data = await res.json()
+          const text = data.choices?.[0]?.message?.content ?? ''
+          debugLLM('openwebui ok', text?.length, 'chars')
+          return { text, backend: 'openwebui', model: owModel }
+        } catch (owErr) {
+          debugLLM('openwebui fallback error', owErr.message)
+        }
+      }
       return { text: null, backend: 'ollama', error: e.message }
     }
   }
@@ -52,7 +80,7 @@ export async function callLLM(system, user, options = {}) {
   const openWebUiUrl = (process.env.OPENWEBUI_API_URL || '').replace(/\/$/, '')
   if (openWebUiUrl) {
     try {
-      const model = process.env.OPENWEBUI_MODEL || 'Qwen 3 - Coder 30B'
+      const model = process.env.OPENWEBUI_MODEL || 'qwen3-coder-next:latest'
       const headers = { 'Content-Type': 'application/json' }
       if (process.env.OPENWEBUI_API_KEY) headers.Authorization = `Bearer ${process.env.OPENWEBUI_API_KEY}`
       debugLLM('call openwebui', model)
