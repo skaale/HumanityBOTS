@@ -1,4 +1,4 @@
-import { reactive, readonly } from 'vue'
+import { reactive } from 'vue'
 
 /** openclaw = live from OpenClaw Gateway (real bots); config = from file; demo = simulated */
 export type AgentSource = 'openclaw' | 'config' | 'demo'
@@ -228,7 +228,20 @@ export function useStreamStore() {
   }
 
   return {
-    ...readonly(state),
+    get connected() { return state.connected },
+    get streamUrl() { return state.streamUrl },
+    get frame() { return state.frame },
+    get agentState() { return state.agentState },
+    get agentStatuses() { return state.agentStatuses },
+    get topics() { return state.topics },
+    get currentTopicId() { return state.currentTopicId },
+    get codeBuffer() { return state.codeBuffer },
+    get codeEdits() { return state.codeEdits },
+    get botJoinedLog() { return state.botJoinedLog },
+    get topicReadyLog() { return state.topicReadyLog },
+    get botMessages() { return state.botMessages },
+    get hardwareDesigns() { return state.hardwareDesigns },
+    get runtimeAnalytics() { return state.runtimeAnalytics },
     connect,
     disconnect
   }
