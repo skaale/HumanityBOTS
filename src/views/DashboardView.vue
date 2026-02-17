@@ -226,7 +226,7 @@ const THINKER_ID = 'humanity-thinker'
 const stream = useStreamStore()
 const viewerGeo = ref<{ ip: string; country: string; city?: string } | null>(null)
 const sniffing = ref(false)
-const serverStatus = ref<{ llmConfigured?: boolean; llm?: string }>({})
+const serverStatus = ref<{ llmConfigured?: boolean; llm?: string; onRailway?: boolean }>({})
 
 const thinkerMessages = computed(() =>
   stream.botMessages.filter((m) => m.fromId === THINKER_ID).slice(-8).reverse()
@@ -327,11 +327,14 @@ const idleHint = computed(() => {
   if (serverStatus.value.llmConfigured) {
     return 'Waiting for the Thinker to propose a topic (runs every few minutes). Config-only agents do not call the API — connect OpenClaw gateways for more activity.'
   }
-  return 'Thinker needs an LLM: set OLLAMA_BASE_URL (or OPENWEBUI_API_URL / GROQ_API_KEY) in .env locally, or in Railway Variables when deployed, then restart.'
+  if (serverStatus.value.onRailway) {
+    return 'Thinker needs an LLM: Railway → your HumanityBOTS service → Variables → add OLLAMA_BASE_URL and OLLAMA_MODEL (or OPENWEBUI_API_URL + key), then Redeploy. Reload this page after deploy.'
+  }
+  return 'Thinker needs an LLM: set OLLAMA_BASE_URL (or OPENWEBUI_API_URL / GROQ_API_KEY) in .env, then restart the server.'
 })
 
 onMounted(() => {
-  fetch('/api/status').then(r => r.json()).then(d => { serverStatus.value = { llmConfigured: d.llmConfigured, llm: d.llm } }).catch(() => {})
+  fetch('/api/status').then(r => r.json()).then(d => { serverStatus.value = { llmConfigured: d.llmConfigured, llm: d.llm, onRailway: d.onRailway } }).catch(() => {})
   fetch('/api/myip').then(r => r.json()).then(d => { viewerGeo.value = d }).catch(() => {})
 })
 </script>

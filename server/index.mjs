@@ -127,6 +127,7 @@ const server = http.createServer((req, res) => {
       thinker: process.env.THINKER_ENABLED === '1',
       llm: getLLMBackend(),
       llmConfigured: hasLLM(),
+      onRailway: !!(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_SERVICE_NAME),
       gatewaysCount: humanStream.getStatus().gatewaysCount,
       invitationUrl,
       forBotsUrl: baseUrl ? `${baseUrl.replace(/\/$/, '')}/for-bots` : null,
