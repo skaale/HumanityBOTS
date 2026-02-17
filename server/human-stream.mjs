@@ -20,6 +20,7 @@ const SAVE_DEBOUNCE_MS = 2000
 export class HumanStream {
   constructor() {
     this.sseClients = new Set()
+    this._sseKeepaliveId = null
     this.agentState = {}
     this.topics = []
     this.codeBuffer = ''
@@ -223,6 +224,28 @@ export class HumanStream {
     }
   }
 
+  _startSSEKeepalive() {
+    if (this._sseKeepaliveId) return
+    const intervalMs = 15000
+    this._sseKeepaliveId = setInterval(() => {
+      for (const res of this.sseClients) {
+        try {
+          res.write(': keepalive\n\n')
+        } catch {
+          this.sseClients.delete(res)
+        }
+      }
+      if (this.sseClients.size === 0) this._stopSSEKeepalive()
+    }, intervalMs)
+  }
+
+  _stopSSEKeepalive() {
+    if (this._sseKeepaliveId) {
+      clearInterval(this._sseKeepaliveId)
+      this._sseKeepaliveId = null
+    }
+  }
+
   handleSSE(req, res) {
     const origin = req.headers.origin
     if (origin) res.setHeader('Access-Control-Allow-Origin', origin)
@@ -232,8 +255,12 @@ export class HumanStream {
       Connection: 'keep-alive'
     })
     this.sseClients.add(res)
+    this._startSSEKeepalive()
     res.write(`data: ${JSON.stringify({ type: 'snapshot', data: this.getSnapshot() })}\n\n`)
-    req.on('close', () => this.sseClients.delete(res))
+    req.on('close', () => {
+      this.sseClients.delete(res)
+      if (this.sseClients.size === 0) this._stopSSEKeepalive()
+    })
   }
 
   loadAgentsFromFile() {
