@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:all": "npx concurrently -k \"npm run server\" \"npm run dev\"",
     "build": "vite build",
     "preview": "vite preview",
     "server": "node server/index.mjs",

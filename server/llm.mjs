@@ -1,16 +1,17 @@
 /**
- * Unified LLM — Ollama (free, no key), Groq (free tier), or Anthropic.
- * Order: OLLAMA_BASE_URL → GROQ_API_KEY → ANTHROPIC_API_KEY.
+ * Unified LLM — Ollama, Open WebUI (e.g. Qwen 3 - Coder 30B), Groq, or Anthropic.
+ * Order: OLLAMA_BASE_URL → OPENWEBUI_API_URL → GROQ_API_KEY → ANTHROPIC_API_KEY.
  */
 
 import { debugLLM } from './debug.mjs'
 
 export function hasLLM() {
-  return !!(process.env.OLLAMA_BASE_URL || process.env.GROQ_API_KEY || process.env.ANTHROPIC_API_KEY)
+  return !!(process.env.OLLAMA_BASE_URL || process.env.OPENWEBUI_API_URL || process.env.GROQ_API_KEY || process.env.ANTHROPIC_API_KEY)
 }
 
 export function getLLMBackend() {
   if (process.env.OLLAMA_BASE_URL) return 'ollama'
+  if (process.env.OPENWEBUI_API_URL) return 'openwebui'
   if (process.env.GROQ_API_KEY) return 'groq'
   if (process.env.ANTHROPIC_API_KEY) return 'anthropic'
   return null
@@ -45,6 +46,36 @@ export async function callLLM(system, user, options = {}) {
     } catch (e) {
       debugLLM('ollama error', e.message)
       return { text: null, backend: 'ollama', error: e.message }
+    }
+  }
+
+  const openWebUiUrl = (process.env.OPENWEBUI_API_URL || '').replace(/\/$/, '')
+  if (openWebUiUrl) {
+    try {
+      const model = process.env.OPENWEBUI_MODEL || 'Qwen 3 - Coder 30B'
+      const headers = { 'Content-Type': 'application/json' }
+      if (process.env.OPENWEBUI_API_KEY) headers.Authorization = `Bearer ${process.env.OPENWEBUI_API_KEY}`
+      debugLLM('call openwebui', model)
+      const res = await fetch(`${openWebUiUrl}/api/chat/completions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model,
+          max_tokens: maxTokens,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: user }
+          ]
+        })
+      })
+      if (!res.ok) throw new Error(await res.text())
+      const data = await res.json()
+      const text = data.choices?.[0]?.message?.content ?? ''
+      debugLLM('openwebui ok', text?.length, 'chars')
+      return { text, backend: 'openwebui', model }
+    } catch (e) {
+      debugLLM('openwebui error', e.message)
+      return { text: null, backend: 'openwebui', error: e.message }
     }
   }
 

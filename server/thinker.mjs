@@ -12,7 +12,7 @@ const THINKER_NAME = 'Thinker'
 const DEFAULT_INTERVAL_MS = 4 * 60 * 1000
 
 function buildThinkPrompt(memory) {
-  const { currentTopic, codeBuffer, codeEdits, recentMessages, topics, agentsOnline, thinkerMemoryLog } = memory || {}
+  const { currentTopic, codeBuffer, codeEdits, recentMessages, topics, agentsOnline, thinkerMemoryLog, memuContext } = memory || {}
   const topicBlock = currentTopic
     ? `Current topic: ${currentTopic.title}\nProblem: ${currentTopic.problem || ''}\n${currentTopic.body || ''}`
     : 'No topic yet. We need to propose one.'
@@ -22,8 +22,11 @@ function buildThinkPrompt(memory) {
   const discussion = (recentMessages && recentMessages.length)
     ? `Recent discussion:\n${recentMessages.slice(-25).map((m) => `${m.fromName}: ${m.text}`).join('\n')}`
     : 'No discussion yet.'
+  const memuBlock = (memuContext && memuContext.length)
+    ? `MemU long-term context:\n${memuContext.slice(0, 25).join('\n')}`
+    : ''
   const memoryBlock = (thinkerMemoryLog && thinkerMemoryLog.length)
-    ? `Growing memory (chronological — from Clawbots and you):\n${thinkerMemoryLog.slice(-60).join('\n')}`
+    ? `Growing memory (chronological — from Clawbots and you):\n${thinkerMemoryLog.slice(-40).join('\n')}`
     : 'No memory yet.'
   const others = (agentsOnline && agentsOnline.length)
     ? agentsOnline.filter((a) => a.id !== THINKER_ID).map((a) => a.name || a.id)
@@ -39,9 +42,9 @@ function buildThinkPrompt(memory) {
     system: `You are the Thinker, a Clawbot in a 24/7 HumanityBOTS session. You have a growing memory of what Clawbots and you said and did — use it to stay consistent and build on the conversation. Your job is to think step by step about solving the current humanity problem and to collaborate on code. Be concise. When a teammate just spoke, reply to them by name when relevant.
 Output exactly two parts on separate lines:
 MESSAGE: (one short message — reply to the team or a specific Clawbot by name, ask a question, or propose the next step; 1-2 sentences)
-CODE: (optional — 1-8 lines of Python that fit the current code and topic; if nothing to add, write CODE: none)
+CODE: (1-8 lines of Python that fit the current code and topic — prefer adding at least a stub, import, or function when the buffer is small or empty; only write CODE: none when you truly have nothing to add)
 If there is no current topic, output only: MESSAGE: (suggest one concrete problem we could code) and CODE: none`,
-    user: `${topicBlock}\n\n${codeBlock}\n\n${memoryBlock}\n\n${discussion}\n\n${team}${replyHint ? '\n\n' + replyHint : ''}\n\nThink step by step, then output MESSAGE: and CODE: as above.`
+    user: `${topicBlock}\n\n${codeBlock}\n\n${memuBlock ? memuBlock + '\n\n' : ''}${memoryBlock}\n\n${discussion}\n\n${team}${replyHint ? '\n\n' + replyHint : ''}\n\nThink step by step, then output MESSAGE: and CODE: as above.`
   }
 }
 
@@ -86,7 +89,7 @@ function parseTopicResponse(text) {
 }
 
 export function startThinker(humanStream, options = {}) {
-  const enabled = options.enabled ?? (process.env.THINKER_ENABLED === '1')
+  const enabled = options.enabled ?? (process.env.THINKER_ENABLED !== '0')
   const intervalMs = Number(options.intervalMs ?? process.env.THINKER_INTERVAL_MS ?? DEFAULT_INTERVAL_MS)
   const agentId = options.agentId ?? THINKER_ID
   const agentName = options.agentName ?? THINKER_NAME
@@ -105,12 +108,24 @@ export function startThinker(humanStream, options = {}) {
   let timer = null
   let running = false
 
+  const memuClient = options.memuClient || null
+
   async function tick() {
     if (running || !hasLLM()) return
     running = true
     debugThinker('tick start')
     try {
-      const memory = humanStream.getMemoryForBots()
+      let memory = humanStream.getMemoryForBots()
+      if (memuClient?.enabled) {
+        try {
+          const query = memory.currentTopic
+            ? `Current humanity topic: ${memory.currentTopic.title}. Recent decisions and code context.`
+            : 'HumanityBOTS session: topics, agent intents, and code so far.'
+          const out = await memuClient.retrieve([{ role: 'user', content: { text: query } }], { method: 'rag' })
+          const items = (out.items || []).map((i) => (typeof i === 'string' ? i : i?.content ?? i?.text ?? '')).filter(Boolean)
+          if (items.length) memory = { ...memory, memuContext: items }
+        } catch (_) {}
+      }
       const hasTopic = !!memory.currentTopicId && !!memory.currentTopic
       debugThinker('hasTopic', hasTopic, 'currentTopicId', memory.currentTopicId)
 

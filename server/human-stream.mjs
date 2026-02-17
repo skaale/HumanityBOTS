@@ -13,6 +13,7 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const ROOT = join(__dirname, '..')
 const DATA_DIR = join(ROOT, 'data')
 const DEFAULT_REGISTRY_URL = process.env.DEFAULT_REGISTRY_URL || 'https://raw.githubusercontent.com/skaale/HumanityBOTS/main/registry.json'
+const SNIFF_REGISTRY_URLS = (process.env.SNIFF_REGISTRY_URLS || DEFAULT_REGISTRY_URL).split(',').map((s) => s.trim()).filter(Boolean)
 const MEMORY_FILE = join(DATA_DIR, 'stream-state.json')
 const SAVE_DEBOUNCE_MS = 2000
 
@@ -33,6 +34,11 @@ export class HumanStream {
     this.codeEditsForCurrentTopic = 0
     this._saveTimer = null
     this.thinkerMemoryLog = []
+    this.memuMemorize = null
+  }
+
+  setMemuMemorize(fn) {
+    this.memuMemorize = typeof fn === 'function' ? fn : null
   }
 
   appendThinkerMemory(line) {
@@ -130,6 +136,18 @@ export class HumanStream {
     return statuses
   }
 
+  getRuntimeAnalytics() {
+    const lastMsg = this.botMessages.length ? Math.max(...this.botMessages.map((m) => m.ts)) : null
+    const lastEdit = this.codeEdits.length ? Math.max(...this.codeEdits.map((e) => e.ts)) : null
+    const lastTopic = this.topics.length ? Math.max(...this.topics.map((t) => t.createdAt || 0)) : null
+    return {
+      liveViewers: this.sseClients?.size ?? 0,
+      lastMessageAt: lastMsg,
+      lastCodeEditAt: lastEdit,
+      lastTopicAt: lastTopic
+    }
+  }
+
   getSnapshot() {
     return {
       agents: this.agentState,
@@ -141,7 +159,8 @@ export class HumanStream {
       botJoinedLog: this.botJoinedLog.slice(-50),
       topicReadyLog: this.topicReadyLog.slice(-20),
       botMessages: this.botMessages.slice(-80),
-      hardwareDesigns: this.hardwareDesigns.slice(-50)
+      hardwareDesigns: this.hardwareDesigns.slice(-50),
+      runtimeAnalytics: this.getRuntimeAnalytics()
     }
   }
 
@@ -174,6 +193,7 @@ export class HumanStream {
     if (this.botMessages.length > 100) this.botMessages.splice(0, this.botMessages.length - 100)
     this.appendThinkerMemory(`${fromName || fromId}: ${(text || '').slice(0, 120)}`)
     this.broadcast({ type: 'bot_message', data: msg })
+    this.memuMemorize?.()
   }
 
   ensureAgentFocus(list) {
@@ -204,6 +224,8 @@ export class HumanStream {
   }
 
   handleSSE(req, res) {
+    const origin = req.headers.origin
+    if (origin) res.setHeader('Access-Control-Allow-Origin', origin)
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
@@ -297,6 +319,7 @@ export class HumanStream {
     }
     this.broadcast({ type: 'snapshot', data: this.getSnapshot() })
     this.saveState()
+    this.memuMemorize?.()
     return true
   }
 
@@ -316,6 +339,7 @@ export class HumanStream {
     this.appendThinkerMemory(`Code by ${agentName || agentId}: ${String(edit.text).slice(0, 80).replace(/\n/g, ' ')}`)
     this.broadcast({ type: 'code', data: { buffer: this.codeBuffer, edit } })
     this.broadcast({ type: 'snapshot', data: this.getSnapshot() })
+    this.memuMemorize?.()
     this.saveState()
     return true
   }
@@ -419,7 +443,7 @@ export class HumanStream {
   getStatus() {
     return {
       gatewaysCount: (this.openclawClients && this.openclawClients.length) || 0,
-      registryUrl: process.env.REGISTRY_URL || null
+      sniffRegistryUrls: SNIFF_REGISTRY_URLS
     }
   }
 
@@ -499,38 +523,52 @@ export class HumanStream {
     }
     for (const wsUrl of gatewayUrls) connectGateway(wsUrl)
 
-    const registryUrl = process.env.REGISTRY_URL || fileConfig?.registryUrl || DEFAULT_REGISTRY_URL
-    if (registryUrl) {
-      debugRegistry('fetch', registryUrl)
-      fetch(registryUrl)
-        .then((r) => r.ok ? r.json() : null)
-        .then((data) => {
-          const list = data?.gateways || data?.gatewayUrls || []
-          debugRegistry('gateways from registry', list?.length, list)
-          if (!Array.isArray(list)) return
+    const registryUrls = [...new Set([
+      ...(fileConfig?.registryUrl ? [fileConfig.registryUrl] : []),
+      ...(process.env.REGISTRY_URL ? String(process.env.REGISTRY_URL).split(',').map((s) => s.trim()).filter(Boolean) : []),
+      ...SNIFF_REGISTRY_URLS
+    ])]
+    const seen = (u) => connectedUrls.has(u)
+    const sniffRegistries = () => {
+      const merged = new Set()
+      Promise.all(
+        registryUrls.map((url) =>
+          fetch(url)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data) => {
+              const list = data?.gateways || data?.gatewayUrls || []
+              return Array.isArray(list) ? list : []
+            })
+            .catch((e) => {
+              debugRegistry('fetch error', url, e.message)
+              return []
+            })
+        )
+      ).then((results) => {
+        for (const list of results) {
           for (const wsUrl of list) {
             const u = typeof wsUrl === 'string' ? wsUrl.trim() : null
-            if (u && !connectedUrls.has(u)) connectGateway(u)
+            if (u) merged.add(u)
           }
-          if (list.length) this.broadcast({ type: 'snapshot', data: this.getSnapshot() })
-        })
-        .catch((e) => debugRegistry('fetch error', e.message))
+        }
+        debugRegistry('sniff gateways', Array.from(merged))
+        let added = 0
+        for (const u of merged) {
+          if (!seen(u)) {
+            connectGateway(u)
+            added++
+          }
+        }
+        if (added) this.broadcast({ type: 'snapshot', data: this.getSnapshot() })
+      })
+    }
+    if (registryUrls.length) {
+      sniffRegistries()
       const registryPollMs = Number(process.env.REGISTRY_POLL_MS) || 5 * 60 * 1000
-      const registryTimer = setInterval(() => {
-        fetch(registryUrl)
-          .then((r) => r.ok ? r.json() : null)
-          .then((data) => {
-            const list = data?.gateways || data?.gatewayUrls || []
-            if (!Array.isArray(list)) return
-            for (const wsUrl of list) {
-              const u = typeof wsUrl === 'string' ? wsUrl.trim() : null
-              if (u && !connectedUrls.has(u)) connectGateway(u)
-            }
-          })
-          .catch(() => {})
-      }, registryPollMs)
+      const registryTimer = setInterval(sniffRegistries, registryPollMs)
       this.intervals.push(registryTimer)
     }
+    this.triggerSniff = registryUrls.length ? sniffRegistries : () => {}
 
     if (!this.codeBuffer || this.codeBuffer.trim() === '') {
       this.codeBuffer = '# Waiting for Clawbots — real-time topics and code only.\n'

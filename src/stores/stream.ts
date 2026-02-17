@@ -84,8 +84,17 @@ export interface HardwareDesign {
 
 export type AgentStatus = 'seeking' | 'committed' | 'coding' | 'offline'
 
+export interface RuntimeAnalytics {
+  liveViewers: number
+  lastMessageAt: number | null
+  lastCodeEditAt: number | null
+  lastTopicAt: number | null
+}
+
 const state = reactive<{
   connected: boolean
+  streamUrl: string
+  frame: number
   agentState: Record<string, AgentState>
   agentStatuses: Record<string, AgentStatus>
   topics: TopicPost[]
@@ -96,8 +105,11 @@ const state = reactive<{
   topicReadyLog: TopicReadyEvent[]
   botMessages: BotMessage[]
   hardwareDesigns: HardwareDesign[]
+  runtimeAnalytics: RuntimeAnalytics
 }>({
   connected: false,
+  streamUrl: '',
+  frame: 0,
   agentState: {},
   agentStatuses: {},
   topics: [],
@@ -107,21 +119,37 @@ const state = reactive<{
   botJoinedLog: [],
   topicReadyLog: [],
   botMessages: [],
-  hardwareDesigns: []
+  hardwareDesigns: [],
+  runtimeAnalytics: { liveViewers: 0, lastMessageAt: null, lastCodeEditAt: null, lastTopicAt: null }
 })
 
 let evtSource: EventSource | null = null
+let rafId: number | null = null
+let rafCancel = false
 
 const debug = () => typeof window !== 'undefined' && (import.meta.env.DEV || localStorage.getItem('humanitybots_debug') === '1')
 
 export function useStreamStore() {
   function connect() {
-    const base = import.meta.env.DEV ? '' : ''
-    const url = `${base}/api/stream`
-    const fullUrl = url.startsWith('http') ? url : `${location.origin}${url}`
+    if (evtSource?.readyState === EventSource.OPEN || evtSource?.readyState === EventSource.CONNECTING) return
+    const devPort = 3101
+    const fullUrl = import.meta.env.DEV
+      ? `http://localhost:${devPort}/api/stream`
+      : `${location.origin}/api/stream`
+    state.streamUrl = fullUrl
     if (debug()) console.log('[HumanityBOTS] stream connect', fullUrl)
     evtSource = new EventSource(fullUrl)
     evtSource.onmessage = (e) => {
+      state.connected = true
+      if (!rafId && typeof requestAnimationFrame !== 'undefined') {
+        rafCancel = false
+        const loop = () => {
+          if (rafCancel) return
+          state.frame++
+          rafId = requestAnimationFrame(loop)
+        }
+        rafId = requestAnimationFrame(loop)
+      }
       try {
         const msg = JSON.parse(e.data)
         if (msg.type === 'snapshot') {
@@ -135,6 +163,7 @@ export function useStreamStore() {
           if (msg.data?.topicReadyLog) state.topicReadyLog = msg.data.topicReadyLog.slice(-20)
           if (msg.data?.botMessages) state.botMessages = msg.data.botMessages.slice(-80)
           if (msg.data?.hardwareDesigns) state.hardwareDesigns = msg.data.hardwareDesigns.slice(-50)
+          if (msg.data?.runtimeAnalytics) state.runtimeAnalytics = msg.data.runtimeAnalytics
           if (debug()) {
             const n = Object.keys(state.agentState).length
             console.log('[HumanityBOTS] snapshot', { agents: n, topics: state.topics.length, currentTopicId: state.currentTopicId })
@@ -170,16 +199,29 @@ export function useStreamStore() {
     }
     evtSource.onopen = () => {
       state.connected = true
-      if (debug()) console.log('[HumanityBOTS] stream open')
+      console.log('[HumanityBOTS] stream open')
+      rafCancel = false
+      const loop = () => {
+        if (rafCancel) return
+        state.frame++
+        rafId = typeof requestAnimationFrame !== 'undefined' ? requestAnimationFrame(loop) : null
+      }
+      if (typeof requestAnimationFrame !== 'undefined') rafId = requestAnimationFrame(loop)
     }
     evtSource.onerror = () => {
       state.connected = false
+      rafCancel = true
+      if (rafId != null && typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(rafId)
+      rafId = null
       if (debug()) console.warn('[HumanityBOTS] stream error, reconnect in 3s')
       setTimeout(connect, 3000)
     }
   }
 
   function disconnect() {
+    rafCancel = true
+    if (rafId != null && typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(rafId)
+    rafId = null
     evtSource?.close()
     evtSource = null
     state.connected = false

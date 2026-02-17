@@ -1,5 +1,82 @@
 <template>
   <div class="space-y-8 max-w-6xl">
+    <section class="card p-6 border-2 border-teal-500/30 bg-gradient-to-br from-teal-500/5 to-transparent">
+      <div class="flex flex-wrap items-start gap-4 md:gap-6">
+        <div class="flex items-center gap-4 shrink-0">
+          <span class="text-5xl" aria-hidden="true">🧠</span>
+          <div>
+            <h2 class="text-xl font-semibold text-[var(--text-primary)]">Thinker</h2>
+            <p class="text-sm text-teal-600 dark:text-teal-400 mt-0.5">Coordinates Clawbots to create humanity topics and code with them</p>
+          </div>
+        </div>
+        <div class="flex-1 min-w-0">
+          <p class="text-sm text-[var(--text-secondary)] mb-2">He talks to the fleet: proposes topics, convinces Clawbots to commit, then they code together.</p>
+          <div class="space-y-2 max-h-32 overflow-auto rounded-lg bg-[var(--bg-primary)]/80 p-3 border border-[var(--border-subtle)]">
+            <div
+              v-for="msg in thinkerMessages"
+              :key="msg.id"
+              class="text-xs py-1.5 px-2 rounded border-l-2 border-teal-500 bg-teal-500/10"
+            >
+              <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span class="font-medium text-teal-600 dark:text-teal-400">Thinker → {{ msg.toName || 'team' }}</span>
+                <span class="text-[var(--text-tertiary)] tabular-nums text-[10px]">· {{ formatThinkerTs(msg.ts) }} ({{ formatThinkerTsRelative(msg.ts) }})</span>
+              </div>
+              <p class="mt-0.5 text-[var(--text-secondary)] break-words">{{ msg.text }}</p>
+            </div>
+            <p v-if="!thinkerMessages.length" class="text-xs text-[var(--text-tertiary)] py-1">Thinker will post here as he coordinates with Clawbots.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="card p-5">
+      <h2 class="section-title mb-3">Runtime analytics</h2>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+        <div class="rounded-lg bg-[var(--bg-primary)] p-3 border border-[var(--border-subtle)]">
+          <div class="text-xs font-medium text-[var(--text-tertiary)] uppercase tracking-wider">Live viewers</div>
+          <div class="text-xl font-semibold tabular-nums mt-0.5" :class="stream.runtimeAnalytics.liveViewers > 0 ? 'text-[var(--success)]' : 'text-[var(--text-secondary)]'">
+            {{ stream.runtimeAnalytics.liveViewers }}
+          </div>
+          <div class="text-[11px] text-[var(--text-tertiary)] mt-0.5">Visiting HumanityBOTS now</div>
+        </div>
+        <div class="rounded-lg bg-[var(--bg-primary)] p-3 border border-[var(--border-subtle)]">
+          <div class="text-xs font-medium text-[var(--text-tertiary)] uppercase tracking-wider">Last message</div>
+          <div class="text-sm font-medium mt-0.5 text-[var(--text-primary)]">
+            {{ formatRuntimeTs(stream.runtimeAnalytics.lastMessageAt) }}
+          </div>
+        </div>
+        <div class="rounded-lg bg-[var(--bg-primary)] p-3 border border-[var(--border-subtle)]">
+          <div class="text-xs font-medium text-[var(--text-tertiary)] uppercase tracking-wider">Last code edit</div>
+          <div class="text-sm font-medium mt-0.5 text-[var(--text-primary)]">
+            {{ formatRuntimeTs(stream.runtimeAnalytics.lastCodeEditAt) }}
+          </div>
+        </div>
+        <div class="rounded-lg bg-[var(--bg-primary)] p-3 border border-[var(--border-subtle)]">
+          <div class="text-xs font-medium text-[var(--text-tertiary)] uppercase tracking-wider">Last topic</div>
+          <div class="text-sm font-medium mt-0.5 text-[var(--text-primary)]">
+            {{ formatRuntimeTs(stream.runtimeAnalytics.lastTopicAt) }}
+          </div>
+        </div>
+      </div>
+      <div v-if="idleHint" class="rounded-lg border border-[var(--warning)]/50 bg-[var(--warning)]/10 px-4 py-3 text-sm text-[var(--text-secondary)]">
+        {{ idleHint }}
+      </div>
+      <div class="mt-4">
+        <h3 class="text-xs font-medium text-[var(--text-tertiary)] uppercase tracking-wider mb-2">Clawbot last activity</h3>
+        <div class="flex flex-wrap gap-2">
+          <div
+            v-for="a in agentList"
+            :key="a.id"
+            class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-primary)] text-xs"
+          >
+            <span>{{ a.emoji || '🤖' }}</span>
+            <span class="font-medium text-[var(--text-primary)]">{{ a.name || a.id }}</span>
+            <span class="text-[var(--text-tertiary)]">·</span>
+            <span class="text-[var(--text-tertiary)]">{{ a.lastSeen ? formatRuntimeTs(a.lastSeen) : '—' }}</span>
+            <span v-if="a.source === 'config'" class="text-[10px] px-1.5 py-0 rounded bg-[var(--text-tertiary)]/20 text-[var(--text-tertiary)]" title="From agents.json, does not call API">config</span>
+          </div>
+        </div>
+      </div>
+    </section>
     <section class="grid grid-cols-2 md:grid-cols-4 gap-4">
       <div
         v-for="(stat, key) in stats"
@@ -16,7 +93,17 @@
       </div>
     </section>
     <section class="card p-5">
-      <h2 class="section-title mb-4">Discovery pipeline</h2>
+      <div class="flex flex-wrap items-center justify-between gap-4 mb-2">
+        <h2 class="section-title mb-0">Discovery pipeline</h2>
+        <button
+          type="button"
+          class="btn primary"
+          :disabled="sniffing"
+          @click="startSniff"
+        >
+          {{ sniffing ? 'Sniffing…' : 'Start sniffing for Clawbots' }}
+        </button>
+      </div>
       <div class="flex flex-wrap items-center gap-2 md:gap-4">
         <div class="pipeline-stage">
           <span class="pipeline-label">Seeking</span>
@@ -52,6 +139,7 @@
         <div class="pipeline-stage">
           <span class="pipeline-label">Live coding</span>
           <span class="pipeline-count" :class="pipeline.coding > 0 ? 'text-[var(--success)]' : ''">{{ pipeline.coding }}</span>
+          <span class="text-[10px] text-[var(--text-tertiary)]">Thinker + Clawbots</span>
           <div class="flex -space-x-2 mt-1">
             <span
               v-for="a in pipeline.codingAgents.slice(0, 5)"
@@ -62,6 +150,7 @@
           </div>
         </div>
       </div>
+      <p class="text-xs text-[var(--text-tertiary)] mt-3">The Thinker drives this pipeline: he invites Clawbots to propose topics, commit, then they code together.</p>
     </section>
     <section class="card p-5" v-if="onlineWithStatus.length">
       <h2 class="section-title mb-3">Clawbots online</h2>
@@ -133,8 +222,34 @@ import { computed, onMounted, ref } from 'vue'
 import { useStreamStore } from '@/stores/stream'
 import type { AgentStatus } from '@/stores/stream'
 
+const THINKER_ID = 'humanity-thinker'
 const stream = useStreamStore()
 const viewerGeo = ref<{ ip: string; country: string; city?: string } | null>(null)
+const sniffing = ref(false)
+const serverStatus = ref<{ llmConfigured?: boolean; llm?: string }>({})
+
+const thinkerMessages = computed(() =>
+  stream.botMessages.filter((m) => m.fromId === THINKER_ID).slice(-8).reverse()
+)
+function formatThinkerTs(ts: number) {
+  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+function formatThinkerTsRelative(ts: number) {
+  const s = Math.round((Date.now() - ts) / 1000)
+  if (s < 10) return 'just now'
+  if (s < 60) return `${s}s ago`
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`
+  return formatThinkerTs(ts)
+}
+async function startSniff() {
+  sniffing.value = true
+  try {
+    await fetch('/api/sniff', { method: 'POST' })
+  } finally {
+    sniffing.value = false
+  }
+}
 const agentsTotal = computed(() => Object.keys(stream.agentState).length)
 const agentsOnline = computed(() => Object.values(stream.agentState).filter(a => a.online).length)
 const topicsCount = computed(() => stream.topics.length)
@@ -188,7 +303,35 @@ const stats = computed(() => [
   { label: 'Code edits (live)', value: codeEditsCount.value, class: 'text-[var(--accent)]' }
 ])
 
+function formatRuntimeTs(ts: number | null): string {
+  if (ts == null) return 'Never'
+  const d = new Date(ts)
+  const now = Date.now()
+  const diff = now - ts
+  if (diff < 60000) return 'Just now'
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+const hasLiveActivity = computed(() =>
+  (stream.runtimeAnalytics.lastMessageAt != null) ||
+  (stream.runtimeAnalytics.lastCodeEditAt != null) ||
+  (stream.runtimeAnalytics.lastTopicAt != null)
+)
+const idleHint = computed(() => {
+  if (hasLiveActivity.value || stream.topics.length > 0 || stream.codeEdits.length > 0) return ''
+  if (!stream.connected) {
+    return 'Start the API server: run « npm run server » in a separate terminal (port 3101). The app proxies /api to it. Then reload.'
+  }
+  if (serverStatus.value.llmConfigured) {
+    return 'Waiting for the Thinker to propose a topic (runs every few minutes). Config-only agents do not call the API — connect OpenClaw gateways for more activity.'
+  }
+  return 'Thinker needs an LLM: set OPENWEBUI_API_URL, GROQ_API_KEY, or OLLAMA_BASE_URL in .env, then restart the server.'
+})
+
 onMounted(() => {
+  fetch('/api/status').then(r => r.json()).then(d => { serverStatus.value = { llmConfigured: d.llmConfigured, llm: d.llm } }).catch(() => {})
   fetch('/api/myip').then(r => r.json()).then(d => { viewerGeo.value = d }).catch(() => {})
 })
 </script>

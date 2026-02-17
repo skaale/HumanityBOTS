@@ -3,17 +3,36 @@
  * HumanityBOTS — API + SSE server
  * Serves snapshot/stream for agents, humanity topics, and live code buffer.
  * Run: node server/index.mjs (port 3101) or use npm run server.
+ * Optional: copy .env.example to .env and set GROQ_API_KEY (see https://console.groq.com/keys).
  */
 
 import http from 'http'
 import { readFileSync, existsSync } from 'fs'
 import { join, extname } from 'path'
 import { fileURLToPath } from 'url'
+
+const __dirnameForEnv = fileURLToPath(new URL('.', import.meta.url))
+const envPaths = [join(__dirnameForEnv, '..', '.env'), join(process.cwd(), '.env')]
+for (const envPath of envPaths) {
+  if (existsSync(envPath)) {
+    for (const line of readFileSync(envPath, 'utf8').split(/\r?\n/)) {
+      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/)
+      if (m) {
+        let val = m[2].replace(/^["']|["']$/g, '').trim()
+        const hash = val.indexOf('#')
+        if (hash >= 0) val = val.slice(0, hash).trim()
+        process.env[m[1]] = val
+      }
+    }
+    break
+  }
+}
 import { HumanStream } from './human-stream.mjs'
 import { suggestCode } from './coding-assistant.mjs'
 import { startThinker, THINKER_AGENT_ID } from './thinker.mjs'
 import { hasLLM, getLLMBackend } from './llm.mjs'
 import { debugApi } from './debug.mjs'
+import { getMemuClient } from './memu-client.mjs'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const PORT = parseInt(process.env.PORT || '3101', 10)
@@ -52,7 +71,13 @@ const MIME = {
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host}`)
-  const pathname = url.pathname
+  const pathname = url.pathname.replace(/\/$/, '') || '/'
+
+  if (pathname === '/favicon.ico') {
+    res.writeHead(204)
+    res.end()
+    return
+  }
 
   if (pathname === '/api/stream') {
     debugApi('SSE client connect')
@@ -81,6 +106,18 @@ const server = http.createServer((req, res) => {
     return
   }
 
+  if ((req.method === 'POST' || req.method === 'GET' || req.method === 'OPTIONS') && pathname === '/api/sniff') {
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, { 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS' })
+      res.end()
+      return
+    }
+    if (typeof humanStream.triggerSniff === 'function') humanStream.triggerSniff()
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ ok: true }))
+    return
+  }
+
   if (pathname === '/api/status') {
     const host = req.headers.host || ''
     const proto = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'
@@ -93,8 +130,8 @@ const server = http.createServer((req, res) => {
       gatewaysCount: humanStream.getStatus().gatewaysCount,
       invitationUrl,
       forBotsUrl: baseUrl ? `${baseUrl.replace(/\/$/, '')}/for-bots` : null,
-      sniffHint: 'To sniff Clawbots: set gateways in agents.json or OPENCLAW_GATEWAY_WS. To catch other people\'s Clawbots: set REGISTRY_URL to a JSON URL that returns { "gateways": ["ws://..."] }.',
-      registryUrl: humanStream.getStatus().registryUrl || null
+      sniffHint: 'Click "Start sniffing for Clawbots" or set REGISTRY_URL / SNIFF_REGISTRY_URLS to JSON URLs that return { "gateways": ["ws://..."] }.',
+      sniffRegistryUrls: humanStream.getStatus().sniffRegistryUrls || []
     }
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify(status))
@@ -324,9 +361,27 @@ Base URL: ${base || '(set PUBLIC_URL in production)'}
 })
 
 humanStream.start()
-thinker = startThinker(humanStream)
+const memu = getMemuClient()
+if (memu?.enabled) {
+  let memuTimer = null
+  const memuDebounceMs = Number(process.env.MEMU_MEMORIZE_DEBOUNCE_MS || 120000)
+  const publicBase = () => process.env.PUBLIC_URL || `http://localhost:${PORT}`
+  humanStream.setMemuMemorize(() => {
+    if (memuTimer) clearTimeout(memuTimer)
+    memuTimer = setTimeout(() => {
+      memuTimer = null
+      memu.memorize(`${publicBase()}/api/memory`, 'conversation').catch(() => {})
+    }, memuDebounceMs)
+  })
+}
+thinker = startThinker(humanStream, { memuClient: memu })
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`HumanityBOTS listening on port ${PORT} (static: ${STATIC_DIR === DIST ? 'dist' : 'root'})`)
+  if (hasLLM()) {
+    console.log(`Thinker: LLM configured (${getLLMBackend()})`)
+  } else {
+    console.log('Thinker: no LLM — set GROQ_API_KEY or OLLAMA_BASE_URL in .env to enable')
+  }
   if (process.env.DEBUG || (process.env.LOG_LEVEL || '').toLowerCase() === 'debug') {
     console.log('Debug logging enabled (DEBUG=1 or LOG_LEVEL=debug)')
   }
